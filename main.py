@@ -18,14 +18,8 @@ app = FastAPI(title="What to Watch Tonight API")
 app.add_middleware(
     CORSMiddleware,
     # Разрешаем оба порта, на которых может стартовать Vite
-    allow_origins=[
-        "http://localhost:5173",
-        "http://localhost:5174",
-        "http://127.0.0.1:5173",
-        "http://127.0.0.1:5174",
-        "https://cinebrowselite-be.onrender.com"
-    ],
-    allow_credentials=True,
+    allow_origins=["*"],  # РАЗРЕШАЕМ ВСЁ! Любые порты (5173, 5174, 5175) и любой Vercel-домен
+    allow_credentials=False,  # Обязательно False, если origins=["*"]
     allow_methods=["*"],
     allow_headers=["*"],
 )
