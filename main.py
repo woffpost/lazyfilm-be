@@ -63,7 +63,7 @@ Expected JSON output format:
 ]
 """
 
-@app.post("/api/ai/recommend")
+@app.post("/api/ai/recommend/")
 async def get_ai_recommendations(answers: QuizAnswers):
     try:
         # Формируем человеческое описание для ИИ на основе пришедших данных
