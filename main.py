@@ -63,21 +63,32 @@ Expected JSON output format:
 
 # Вспомогательная функция для поиска реального ID в TMDB по названию и году
 async def find_real_tmdb_id(title: str, year: int) -> Optional[int]:
+    # Если токен забыли добавить на Render, функция просто пропустит шаг, а не уронит сервер
+    if not TMDB_TOKEN:
+        print("⚠️ Предупреждение: TMDB_TOKEN отсутствует в переменных окружения!")
+        return None
+        
     async with httpx.AsyncClient() as client:
         try:
+            # Очищаем токен от возможного дублирования слова Bearer
+            clean_token = TMDB_TOKEN.replace("Bearer ", "").strip()
+            
             response = await client.get(
                 "https://themoviedb.org",
                 params={"query": title, "year": year},
-                headers={"Authorization": f"Bearer {TMDB_TOKEN.replace('Bearer ', '') if TMDB_TOKEN else ''}"}
+                headers={"Authorization": f"Bearer {clean_token}"}
             )
+            
             if response.status_code == 200:
                 results = response.json().get("results", [])
-                if results:
-                    return results[0]["id"] # Берем ID самого первого, точного совпадения
+                if results and len(results) > 0:
+                    # ИСПРАВЛЕНО: Берем ID строго из ПЕРВОГО элемента массива результатов [0]
+                    return results[0]["id"] 
             return None
         except Exception as e:
             print(f"Ошибка поиска TMDB: {e}")
             return None
+
         
 @app.post("/api/ai/recommend/")
 async def get_ai_recommendations(answers: QuizAnswers):
@@ -105,13 +116,13 @@ async def get_ai_recommendations(answers: QuizAnswers):
 
         #ai_output = json.loads(raw_text)
         #}
-        if isinstance(response.content, list) and len(response.content) > 0:
-            raw_text = response.content[0].text.strip()
-        else:
-            raw_text = getattr(response.content, 'text', '').strip()
-
+        raw_text = response.content[0].text.strip()
+        
+        # Очищаем от возможных markdown тегов ИИ
         if raw_text.startswith("```json"):
             raw_text = raw_text.replace("```json", "").replace("```", "").strip()
+        elif raw_text.startswith("```"):
+            raw_text = raw_text.strip("`").strip()
 
         ai_output = json.loads(raw_text)
         
