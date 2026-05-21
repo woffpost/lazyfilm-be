@@ -5,6 +5,7 @@ import os
 import json
 import re
 import traceback
+from typing import Optional
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -12,6 +13,7 @@ from anthropic import Anthropic
 
 app = FastAPI(title="What to Watch Tonight API")
 
+# Полноценный Wildcard CORS для продакшена и любых локальных Vite-портов
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -34,7 +36,7 @@ class QuizAnswers(BaseModel):
 SYSTEM_PROMPT = """
 You are an expert movie concierge and film critic. Your job is to recommend exactly 3 movies based on the user's criteria.
 
-You MUST respond with a valid JSON array of objects. Do not include markdown formatting or extra text.
+You MUST respond with a valid JSON array of objects. Do not include markdown formatting or extra text outside the array.
 For each movie, provide the exact English title and release year so the frontend can look up their correct IDs.
 
 Expected JSON output format:
@@ -47,6 +49,7 @@ Expected JSON output format:
 ]
 """
 
+# ИСПРАВЛЕНО: Путь теперь строго совпадает с фронтендом (/api/ai/recommend/)
 @app.post("/api/ai/recommend/")
 async def get_ai_recommendations(answers: QuizAnswers):
     try:
@@ -67,17 +70,24 @@ async def get_ai_recommendations(answers: QuizAnswers):
             messages=[{"role": "user", "content": user_prompt}]
         )
 
+        # Безопасное извлечение текстового блока Клода
+        content_obj = response.content
         raw_text = ""
-        if hasattr(response, 'content') and isinstance(response.content, list) and len(response.content) > 0:
-            raw_text = response.content[0].text.strip()
-        elif hasattr(response, 'content') and hasattr(response.content, 'text'):
-            raw_text = response.content.text.strip()
+        
+        if isinstance(content_obj, list):
+            if len(content_obj) > 0 and hasattr(content_obj, 'text'):
+                raw_text = content_obj.text.strip()
+            else:
+                raw_text = str(content_obj).strip()
+        elif hasattr(content_obj, 'text'):
+            raw_text = content_obj.text.strip()
         else:
-            raw_text = str(response).strip()
+            raw_text = str(content_obj).strip()
 
+        # Регулярным выражением вырезаем только массив данных
         match = re.search(r'\[.*\]', raw_text, re.DOTALL)
         if not match:
-            raise HTTPException(status_code=500, detail="No JSON array found")
+            raise HTTPException(status_code=500, detail="AI response did not contain a JSON array.")
 
         return json.loads(match.group(0).strip())
 
