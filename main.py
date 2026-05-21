@@ -24,11 +24,14 @@ if api_key:
 anthropic_client = Anthropic(api_key=api_key)
 
 # Описываем входные данные от фронтенда
+LANGUAGE_NAMES = {"ru": "Russian", "en": "English", "ro": "Romanian"}
+
 class QuizAnswers(BaseModel):
     mood: str
     timing: str
     language: str
     custom_wish: Optional[str] = ""
+    ui_language: Optional[str] = "en"
 
 # СТРОГАЯ СХЕМА ДЛЯ ИИ: Описываем, какой именно объект мы ждем от Клода
 class MovieRecommendation(BaseModel):
@@ -42,14 +45,15 @@ class RecommendationList(BaseModel):
 @app.post("/api/ai/recommend/")
 async def get_ai_recommendations(answers: QuizAnswers):
     try:
+        reason_language = LANGUAGE_NAMES.get(answers.ui_language or "en", "English")
         user_prompt = f"""
         User Quiz Results:
         - Current Mood/Context: {answers.mood}
         - Available Time: {answers.timing}
         - Preferred Language Environment: {answers.language}
         - Custom User Wishes: {answers.custom_wish}
-        
-        Select exactly 3 ideal movies. Write the 'reason' field strictly in Russian.
+
+        Select exactly 3 ideal movies. Write the 'reason' field strictly in {reason_language}.
         """
 
         # Structured outputs через tool_use — единственный правильный способ в Anthropic SDK
