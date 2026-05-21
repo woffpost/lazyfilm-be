@@ -98,8 +98,18 @@ async def get_ai_recommendations(answers: QuizAnswers):
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_prompt}]
         )
+        #
+        #raw_text = response.content[0].text.strip() if isinstance(response.content, list) else response.content.text.strip()
+        #if raw_text.startswith("```json"):
+        #    raw_text = raw_text.replace("```json", "").replace("```", "").strip()
 
-        raw_text = response.content[0].text.strip() if isinstance(response.content, list) else response.content.text.strip()
+        #ai_output = json.loads(raw_text)
+        #}
+        if isinstance(response.content, list) and len(response.content) > 0:
+            raw_text = response.content[0].text.strip()
+        else:
+            raw_text = getattr(response.content, 'text', '').strip()
+
         if raw_text.startswith("```json"):
             raw_text = raw_text.replace("```json", "").replace("```", "").strip()
 
