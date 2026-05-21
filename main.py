@@ -3,6 +3,7 @@ load_dotenv()
 
 import os
 import json
+import re  # ИСПОЛЬЗУЕМ РЕГУЛЯРНЫЕ ВЫРАЖЕНИЯ ДЛЯ ВЫРЕЗАНИЯ JSON
 import traceback
 from typing import List, Optional
 from fastapi import FastAPI, HTTPException
@@ -31,7 +32,6 @@ class QuizAnswers(BaseModel):
     language: str
     custom_wish: Optional[str] = ""
 
-# УСИЛЕННЫЙ ПРОМПТ С ОБУЧЕНИЕМ НА ПРИМЕРАХ (FEW-SHOT PROMPTING)
 SYSTEM_PROMPT = """
 You are an expert movie concierge and film critic. Your job is to recommend exactly 3 movies based on the user's emotional state, timing, language, and custom wishes.
 
@@ -48,7 +48,7 @@ Here are reference examples of real TMDB IDs you must use if relevant:
 - Shutter Island: 11324
 - The Truman Show: 10447
 
-You MUST respond STRICTLY with a valid JSON array of objects. Do not include markdown formatting like ```json, headers, or any conversational text.
+You MUST respond with a valid JSON array of objects. Even if you include conversational text, ensure the JSON array is enclosed in [ and ].
 
 Expected JSON output format:
 [
@@ -79,39 +79,40 @@ async def get_ai_recommendations(answers: QuizAnswers):
             messages=[{"role": "user", "content": user_prompt}]
         )
 
-        # Универсальное и безопасное извлечение текста
-        content_obj = response.content
+        # Извлекаем текст Клода через официальный интерфейс SDK
         raw_text = ""
-        
-        if isinstance(content_obj, list):
-            if len(content_obj) > 0 and hasattr(content_obj, 'text'):
-                raw_text = content_obj.text.strip()
-            else:
-                raw_text = str(content_obj).strip()
-        elif hasattr(content_obj, 'text'):
-            raw_text = content_obj.text.strip()
+        if hasattr(response, 'content') and isinstance(response.content, list) and len(response.content) > 0:
+            raw_text = response.content[0].text.strip()
+        elif hasattr(response, 'content') and hasattr(response.content, 'text'):
+            raw_text = response.content.text.strip()
         else:
-            raw_text = str(content_obj).strip()
+            raw_text = str(response).strip()
 
-        # Очищаем от возможных markdown тегов ИИ
-        if raw_text.startswith("```json"):
-            raw_text = raw_text.replace("```json", "").replace("```", "").strip()
-        elif raw_text.startswith("```"):
-            raw_text = raw_text.strip("`").strip()
+        print(f"ℹ️ Успешно извлечен текст от Клода: {raw_text}")
+
+        # ПРОМЫШЛЕННЫЙ ХАК: Ищем первый попавшийся массив [...] с помощью RegEx
+        match = re.search(r'\[.*\]', raw_text, re.DOTALL)
+        if not match:
+            print(f"❌ Критическая ошибка: В ответе ИИ вообще не найден массив []. Текст: {raw_text}")
+            raise HTTPException(status_code=500, detail="AI response did not contain a valid JSON array structure.")
+
+        # Вырезаем только ту часть, которая находится внутри скобок
+        clean_json_text = match.group(0).strip()
 
         try:
-            verified_recommendations = json.loads(raw_text)
+            verified_recommendations = json.loads(clean_json_text)
             
-            # Простая валидация структуры
             if not isinstance(verified_recommendations, list):
-                raise ValueError("Output is not a list")
+                raise ValueError("Parsed content is not a JSON array list")
                 
             return verified_recommendations
             
         except json.JSONDecodeError as je:
-            print(f"❌ Ошибка JSON: {je}. Текст: {raw_text}")
-            raise HTTPException(status_code=500, detail="AI returned malformed JSON content")
+            print(f"❌ Ошибка JSON: {je}. Очищенный текст: {clean_json_text}")
+            raise HTTPException(status_code=500, detail=f"AI returned malformed JSON content: {clean_json_text}")
 
+    except HTTPException as he:
+        raise he
     except Exception as e:
         print("💥 КРИТИЧЕСКАЯ ОШИБКА В ЭНДПОИНТЕ:")
         traceback.print_exc()
