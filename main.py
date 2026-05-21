@@ -3,9 +3,9 @@ load_dotenv()
 
 import os
 import json
-import traceback  # ИСПОЛЬЗУЕМ ДЛЯ ВЫВОДА ПОЛНОГО ТРЕЙСБЭКА ОШИБКИ
+import traceback
 from typing import List, Optional
-import httpx
+import requests  # ЗАМЕНИЛИ HTTPX НА REQUESTS ДЛЯ ИДЕАЛЬНОЙ КОДИРОВКИ URL В LINUX
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -26,7 +26,8 @@ if api_key:
     api_key = api_key.strip().replace('"', '').replace("'", "")
 anthropic_client = Anthropic(api_key=api_key)
 
-TMDB_TOKEN = os.getenv("TMDB_TOKEN") or os.getenv("VITE_TMDB_TOKEN")
+# Проверяем все возможные варианты названия токена
+TMDB_TOKEN = os.getenv("TMDB_TOKEN") or os.getenv("VITE_TMDB_TOKEN") or os.getenv("tmdb_token")
 
 class QuizAnswers(BaseModel):
     mood: str
@@ -48,33 +49,40 @@ Expected JSON output format:
 ]
 """
 
-async def find_real_tmdb_id(title: str, year: int) -> Optional[int]:
+def find_real_tmdb_id(title: str, year: int) -> Optional[int]:
     if not TMDB_TOKEN:
-        print("⚠️ TMDB_TOKEN отсутствует в переменных окружения!")
+        print("❌ ОШИБКА: TMDB_TOKEN не найден в переменных окружения Render!")
         return None
         
-    async with httpx.AsyncClient() as client:
-        try:
-            clean_token = TMDB_TOKEN.replace("Bearer ", "").strip()
-            response = await client.get(
-                "https://themoviedb.org",
-                params={"query": title, "year": year},
-                headers={"Authorization": f"Bearer {clean_token}"}
-            )
-            if response.status_code == 200:
-                results = response.json().get("results", [])
-                if results and len(results) > 0:
-                    return results[0]["id"]  # Безопасно берем ID из первого элемента
-            else:
-                print(f"⚠️ TMDB API вернул статус {response.status_code}: {response.text}")
-            return None
-        except Exception as e:
-            print(f"❌ Исключение в find_real_tmdb_id: {e}")
-            return None
+    try:
+        clean_token = TMDB_TOKEN.replace("Bearer ", "").strip()
+        
+        # Requests автоматически кодирует пробелы и спецсимволы в заголовках и параметрах
+        response = requests.get(
+            "https://themoviedb.org",
+            params={"query": title, "year": year},
+            headers={"Authorization": f"Bearer {clean_token}"},
+            timeout=5
+        )
+        
+        if response.status_code == 200:
+            results = response.json().get("results", [])
+            if results and len(results) > 0:
+                return results[0]["id"]  # Гарантированно берем ID первого совпадения
+        else:
+            print(f"⚠️ TMDB API вернул ошибку {response.status_code}: {response.text}")
+        return None
+    except Exception as e:
+        print(f"❌ Исключение в find_real_tmdb_id: {e}")
+        return None
 
 @app.post("/api/ai/recommend/")
 async def get_ai_recommendations(answers: QuizAnswers):
     try:
+        # Проверяем токен на самом старте. Если его забыли прописать на Render — сразу кидаем ошибку во фронтенд!
+        if not TMDB_TOKEN:
+            raise HTTPException(status_code=500, detail="Server Configuration Error: TMDB_TOKEN is missing on Render dashboard.")
+
         user_prompt = f"""
         User Quiz Results:
         - Current Mood/Context: {answers.mood}
@@ -92,38 +100,43 @@ async def get_ai_recommendations(answers: QuizAnswers):
             messages=[{"role": "user", "content": user_prompt}]
         )
 
-        # 1. СТРОГИЙ СИНТАКСИС SDK ИЗВЛЕЧЕНИЯ ТЕКСТА КЛОДА
-        raw_text = response.content[0].text.strip()
-        print(f"ℹ️ Получен сырой текст от Клода: {raw_text}")
+        raw_text = response.content.text.strip()
+        print(f"ℹ️ Ответ Клода: {raw_text}")
 
         if raw_text.startswith("```json"):
             raw_text = raw_text.replace("```json", "").replace("```", "").strip()
         elif raw_text.startswith("```"):
             raw_text = raw_text.strip("`").strip()
 
-        # 2. ПАРСИНГ JSON
         try:
             ai_output = json.loads(raw_text)
         except json.JSONDecodeError as je:
-            print(f"❌ Ошибка парсинга JSON от Клода: {je}. Текст: {raw_text}")
+            print(f"❌ Ошибка JSON: {je}")
             raise HTTPException(status_code=500, detail="AI returned malformed JSON content")
 
-        # 3. ВЕРИФИКАЦИЯ ФИЛЬМОВ ЧЕРЕЗ TMDB
         verified_recommendations = []
         for item in ai_output:
-            print(f"🔎 Ищем фильм: {item.get('title')} ({item.get('year')})")
-            real_id = await find_real_tmdb_id(item.get("title"), item.get("year"))
+            print(f"🔎 Ищем через requests: {item.get('title')} ({item.get('year')})")
+            real_id = find_real_tmdb_id(item.get("title"), item.get("year"))
             if real_id:
                 verified_recommendations.append({
                     "id": real_id,
                     "reason": item.get("reason", "")
                 })
         
-        print(f"✅ Успешно верифицировано фильмов: {len(verified_recommendations)}")
+        # Если Клод выдал фильмы, но мы не смогли найти ни одного ID в базе TMDB — 
+        # выкидываем ошибку наружу, чтобы фронтенд увидел проблему, а не пустой экран
+        if len(verified_recommendations) == 0:
+            raise HTTPException(
+                status_code=500, 
+                detail=f"TMDB Verification Failed. AI suggested movies but server found 0 IDs. Check if your TMDB_TOKEN is valid. Raw AI Output: {raw_text}"
+            )
+        
         return verified_recommendations
 
+    except HTTPException as he:
+        raise he
     except Exception as e:
-        # ЭТОТ БЛОК НАПЕЧАТАЕТ ПОЛНУЮ ОШИБКУ В КОНСОЛЬ RENDER
         print("💥 КРИТИЧЕСКАЯ ОШИБКА В ЭНДПОИНТЕ:")
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
