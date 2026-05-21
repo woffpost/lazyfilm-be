@@ -52,23 +52,21 @@ async def get_ai_recommendations(answers: QuizAnswers):
         Select exactly 3 ideal movies. Write the 'reason' field strictly in Russian.
         """
 
-        # МАГИЯ STRUCTURED OUTPUTS: Используем beta.messages.create c response_shape
-        # Это заставляет Клода на уровне ядра выдавать идеальный, валидный JSON, соответствующий нашей Pydantic схеме
-        response = anthropic_client.beta.messages.create(
+        # Structured outputs через tool_use — единственный правильный способ в Anthropic SDK
+        response = anthropic_client.messages.create(
             model="claude-3-5-sonnet-latest",
             max_tokens=1000,
-            messages=[{"role": "user", "content": user_prompt}],
-            response_shape={
-                "type": "json_object",
-                "schema": RecommendationList.model_json_schema()
-            }
+            tools=[{
+                "name": "recommend_movies",
+                "description": "Return movie recommendations based on user preferences",
+                "input_schema": RecommendationList.model_json_schema()
+            }],
+            tool_choice={"type": "tool", "name": "recommend_movies"},
+            messages=[{"role": "user", "content": user_prompt}]
         )
 
-        # Извлекаем уже готовый, распарсенный питоновский словарь! Больше никакого json.loads()!
-        raw_content = response.content[0].text
-        data = json.loads(raw_content)
-        
-        # Наш фронтенд ждет обычный массив [{title, year, reason}], поэтому достаем его из обертки
+        tool_block = next(b for b in response.content if b.type == "tool_use")
+        data = tool_block.input
         return data.get("movies", [])
 
     except Exception as e:
