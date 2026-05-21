@@ -5,7 +5,7 @@ import os
 import json
 import traceback
 from typing import List, Optional
-import requests  # ЗАМЕНИЛИ HTTPX НА REQUESTS ДЛЯ ИДЕАЛЬНОЙ КОДИРОВКИ URL В LINUX
+import requests  # Железобетонная кодировка URL на любых Linux-серверах
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -13,6 +13,7 @@ from anthropic import Anthropic
 
 app = FastAPI(title="What to Watch Tonight API")
 
+# Сквозные CORS-настройки для любых локальных портов и Vercel-доменов
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -26,7 +27,7 @@ if api_key:
     api_key = api_key.strip().replace('"', '').replace("'", "")
 anthropic_client = Anthropic(api_key=api_key)
 
-# Проверяем все возможные варианты названия токена
+# Поддерживаем любые варианты названий переменных на Render
 TMDB_TOKEN = os.getenv("TMDB_TOKEN") or os.getenv("VITE_TMDB_TOKEN") or os.getenv("tmdb_token")
 
 class QuizAnswers(BaseModel):
@@ -57,20 +58,23 @@ def find_real_tmdb_id(title: str, year: int) -> Optional[int]:
     try:
         clean_token = TMDB_TOKEN.replace("Bearer ", "").strip()
         
-        # Requests автоматически кодирует пробелы и спецсимволы в заголовках и параметрах
+        # Очищаем название от кавычек-ёлочек ИИ для точности поиска в TMDB
+        clean_title = title.replace('"', '').replace("'", "").replace("«", "").replace("»", "").strip()
+        
         response = requests.get(
             "https://themoviedb.org",
-            params={"query": title, "year": year},
+            params={"query": clean_title, "year": year},
             headers={"Authorization": f"Bearer {clean_token}"},
             timeout=5
         )
         
         if response.status_code == 200:
             results = response.json().get("results", [])
+            # ИСПРАВЛЕНО: Безопасно забираем ID из ПЕРВОГО элемента массива результатов
             if results and len(results) > 0:
-                return results[0]["id"]  # Гарантированно берем ID первого совпадения
+                return results[0]["id"] 
         else:
-            print(f"⚠️ TMDB API вернул ошибку {response.status_code}: {response.text}")
+            print(f"⚠️ TMDB API вернул статус {response.status_code}: {response.text}")
         return None
     except Exception as e:
         print(f"❌ Исключение в find_real_tmdb_id: {e}")
@@ -79,9 +83,8 @@ def find_real_tmdb_id(title: str, year: int) -> Optional[int]:
 @app.post("/api/ai/recommend/")
 async def get_ai_recommendations(answers: QuizAnswers):
     try:
-        # Проверяем токен на самом старте. Если его забыли прописать на Render — сразу кидаем ошибку во фронтенд!
         if not TMDB_TOKEN:
-            raise HTTPException(status_code=500, detail="Server Configuration Error: TMDB_TOKEN is missing on Render dashboard.")
+            raise HTTPException(status_code=500, detail="Server Configuration Error: TMDB_TOKEN is missing on Render.")
 
         user_prompt = f"""
         User Quiz Results:
@@ -100,9 +103,23 @@ async def get_ai_recommendations(answers: QuizAnswers):
             messages=[{"role": "user", "content": user_prompt}]
         )
 
-        raw_text = response.content.text.strip()
-        print(f"ℹ️ Ответ Клода: {raw_text}")
+        # ИСПРАВЛЕНО: Универсальное извлечение текста, неуязвимое к версиям Anthropic SDK
+        content_obj = response.content
+        raw_text = ""
+        
+        if isinstance(content_obj, list):
+            if len(content_obj) > 0 and hasattr(content_obj[0], 'text'):
+                raw_text = content_obj[0].text.strip()
+            else:
+                raw_text = str(content_obj).strip()
+        elif hasattr(content_obj, 'text'):
+            raw_text = content_obj.text.strip()
+        else:
+            raw_text = str(content_obj).strip()
 
+        print(f"ℹ️ Успешно извлечен сырой текст: {raw_text}")
+
+        # Счищаем возможную markdown-обертку Клода
         if raw_text.startswith("```json"):
             raw_text = raw_text.replace("```json", "").replace("```", "").strip()
         elif raw_text.startswith("```"):
@@ -112,11 +129,12 @@ async def get_ai_recommendations(answers: QuizAnswers):
             ai_output = json.loads(raw_text)
         except json.JSONDecodeError as je:
             print(f"❌ Ошибка JSON: {je}")
-            raise HTTPException(status_code=500, detail="AI returned malformed JSON content")
+            raise HTTPException(status_code=500, detail=f"AI malformed JSON content: {raw_text}")
 
+        # Верификация через TMDB по названиям строк
         verified_recommendations = []
         for item in ai_output:
-            print(f"🔎 Ищем через requests: {item.get('title')} ({item.get('year')})")
+            print(f"🔎 Поиск фильма: {item.get('title')} ({item.get('year')})")
             real_id = find_real_tmdb_id(item.get("title"), item.get("year"))
             if real_id:
                 verified_recommendations.append({
@@ -124,12 +142,10 @@ async def get_ai_recommendations(answers: QuizAnswers):
                     "reason": item.get("reason", "")
                 })
         
-        # Если Клод выдал фильмы, но мы не смогли найти ни одного ID в базе TMDB — 
-        # выкидываем ошибку наружу, чтобы фронтенд увидел проблему, а не пустой экран
         if len(verified_recommendations) == 0:
             raise HTTPException(
                 status_code=500, 
-                detail=f"TMDB Verification Failed. AI suggested movies but server found 0 IDs. Check if your TMDB_TOKEN is valid. Raw AI Output: {raw_text}"
+                detail=f"TMDB Verification Failed. 0 valid IDs found. Raw text: {raw_text}"
             )
         
         return verified_recommendations
