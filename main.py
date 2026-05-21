@@ -54,7 +54,7 @@ async def get_ai_recommendations(answers: QuizAnswers):
 
         # Structured outputs через tool_use — единственный правильный способ в Anthropic SDK
         response = anthropic_client.messages.create(
-            model="claude-3-5-sonnet-latest",
+            model="claude-sonnet-4-6",
             max_tokens=1000,
             tools=[{
                 "name": "recommend_movies",
