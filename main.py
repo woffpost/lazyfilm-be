@@ -48,8 +48,8 @@ class RecommendationList(BaseModel):
     movies: List[MovieRecommendation]
 
 
-def enrich_with_tmdb(rec: dict, tmdb_lang: str) -> Optional[dict]:
-    """Fetch poster, rating, runtime from TMDB for a single AI recommendation."""
+def enrich_with_tmdb(rec: dict, tmdb_lang: str) -> dict:
+    """Fetch poster, rating, runtime from TMDB. Returns fallback dict if TMDB unavailable."""
     headers = {"Authorization": f"Bearer {tmdb_token}", "Accept": "application/json"}
     params = {"language": tmdb_lang}
     try:
@@ -60,9 +60,10 @@ def enrich_with_tmdb(rec: dict, tmdb_lang: str) -> Optional[dict]:
             headers=headers,
             timeout=8,
         )
+        search.raise_for_status()
         results = search.json().get("results", [])
         if not results:
-            return None
+            raise ValueError("no TMDB results")
 
         movie_id = results[0]["id"]
         detail = requests.get(
@@ -71,11 +72,24 @@ def enrich_with_tmdb(rec: dict, tmdb_lang: str) -> Optional[dict]:
             headers=headers,
             timeout=8,
         )
+        detail.raise_for_status()
         data = detail.json()
         data["ai_reason"] = rec["reason"]
         return data
-    except Exception:
-        return None
+    except Exception as e:
+        print(f"TMDB enrichment failed for '{rec['title']}': {e}")
+        # Fallback: return Claude data so the card still renders with title + reason
+        return {
+            "id": None,
+            "title": rec["title"],
+            "release_date": f"{rec['year']}-01-01",
+            "poster_path": None,
+            "runtime": None,
+            "vote_average": None,
+            "overview": None,
+            "genres": [],
+            "ai_reason": rec["reason"],
+        }
 
 
 @app.post("/api/ai/recommend/")
@@ -110,13 +124,9 @@ def get_ai_recommendations(answers: QuizAnswers):
         movies = tool_block.input.get("movies", [])
 
         # Enrich all 3 movies in parallel — 3 threads, each doing search + details
-        enriched = []
         with ThreadPoolExecutor(max_workers=3) as executor:
-            futures = {executor.submit(enrich_with_tmdb, m, tmdb_lang): m for m in movies}
-            for future in as_completed(futures):
-                result = future.result()
-                if result:
-                    enriched.append(result)
+            futures = [executor.submit(enrich_with_tmdb, m, tmdb_lang) for m in movies]
+            enriched = [f.result() for f in as_completed(futures)]
 
         return enriched
 
