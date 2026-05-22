@@ -109,7 +109,7 @@ def get_ai_recommendations(answers: QuizAnswers):
         """
 
         response = anthropic_client.messages.create(
-            model="claude-sonnet-4-6",
+            model="claude-haiku-4-5-20251001",
             max_tokens=1000,
             tools=[{
                 "name": "recommend_movies",
