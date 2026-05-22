@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from anthropic import Anthropic
 
-app = FastAPI(title="CineBrowse API")
+app = FastAPI(title="LazyFilm API")
 
 app.add_middleware(
     CORSMiddleware,
